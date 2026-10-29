@@ -85,6 +85,22 @@ const PLATFORM_CONFIG = {
     deepLink: (q) => `https://www.bigbasket.com/ps/?q=${encodeURIComponent(q)}`,
     scraper: 'scrapeBigBasket',
   },
+  Amazon: {
+    delivery: 29.0,
+    handling: 0.0,
+    gstRate: 0.18,
+    eta: '2-4 hours (Amazon Fresh)',
+    deepLink: (q) => `https://www.amazon.in/s?k=${encodeURIComponent(q)}&i=nowstore`,
+    scraper: 'scrapeAmazon',
+  },
+  Flipkart: {
+    delivery: 25.0,
+    handling: 5.0,
+    gstRate: 0.18,
+    eta: '10-15 mins (Minutes)',
+    deepLink: (q) => `https://www.flipkart.com/search?q=${encodeURIComponent(q)}`,
+    scraper: 'scrapeFlipkart',
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -108,7 +124,7 @@ app.get('/api/suggestions', (req, res) => {
 // 2. Multi-Product Comparison Endpoint (grouped by platform)
 // ---------------------------------------------------------------------------
 app.get('/api/compare', async (req, res) => {
-  const { query, lat = '13.0418', lon = '80.2341', pincode = '' } = req.query;
+  const { query, lat = '13.0418', lon = '80.2341', pincode = '', zeptoStoreId = '' } = req.query;
 
   console.log(`\n🔍 Search: "${query}" | Location: ${lat}, ${lon} | Pincode: ${pincode || 'N/A'}`);
 
@@ -125,11 +141,21 @@ app.get('/api/compare', async (req, res) => {
 
     // Fetch all platforms concurrently but stagger them slightly (2s apart)
     // to prevent bot detection and CPU throttling
-    const fetchPromises = platforms.map(async (platform, index) => {
+      const fetchPromises = platforms.map(async (platform, index) => {
       await new Promise(r => setTimeout(r, index * 2500));
       const config = PLATFORM_CONFIG[platform];
       try {
-        const products = await scraper[config.scraper](query, lat, lon, pincode);
+        let products;
+        if (platform === 'Zepto') {
+          products = await scraper[config.scraper](query, lat, lon, pincode, zeptoStoreId);
+        } else if (platform === 'Amazon') {
+          products = await scraper[config.scraper](query, pincode);
+        } else if (platform === 'Flipkart') {
+          products = await scraper[config.scraper](query, pincode);
+        } else {
+          products = await scraper[config.scraper](query, lat, lon, pincode);
+        }
+        
         if (products && products.length > 0) {
           results[platform] = products.map((p) => ({
             id: p.id,

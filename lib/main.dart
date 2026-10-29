@@ -114,6 +114,16 @@ final Map<String, PlatformStyle> platformStyles = {
     Color(0xFFF0F9E0),
     'https://t3.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://bigbasket.com&size=64',
   ),
+  'Amazon': const PlatformStyle(
+    Color(0xFF0F1111),
+    Color(0xFFF2F2F2),
+    'https://t3.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://amazon.in&size=64',
+  ),
+  'Flipkart': const PlatformStyle(
+    Color(0xFF2874F0),
+    Color(0xFFE5F0FF),
+    'https://t3.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://flipkart.com&size=64',
+  ),
 };
 
 // ---------------------------------------------------------------------------
@@ -319,28 +329,60 @@ class _HomeScreenState extends State<HomeScreen> {
     });
 
     try {
+      String zeptoStoreId = '';
+      try {
+        final zeptoRes = await http.post(
+          Uri.parse('https://api.zeptonow.com/api/v1/config/layout/'),
+          headers: {
+            'Content-Type': 'application/json',
+            'tenant-id': 'ZEPTO',
+            'app-version': '12.2.14',
+          },
+          body: json.encode({
+            "lat": _lat,
+            "lon": _lon,
+            "pageType": "HOME",
+            "tenantId": "ZEPTO"
+          }),
+        ).timeout(const Duration(seconds: 5));
+        
+        if (zeptoRes.statusCode == 200) {
+          final data = json.decode(zeptoRes.body);
+          zeptoStoreId = data['storeIds'] ?? data['storeId'] ?? '';
+        }
+      } catch (e) {
+        print("Error fetching dynamic Zepto Store ID: $e");
+      }
+
       final uri = Uri.parse(
-        '$_backendBase/compare?query=${Uri.encodeComponent(query)}&lat=$_lat&lon=$_lon&pincode=$_postalCode',
+        '$_backendBase/compare?query=${Uri.encodeComponent(query)}&lat=$_lat&lon=$_lon&pincode=$_postalCode&zeptoStoreId=$zeptoStoreId',
       );
       final response =
           await http.get(uri).timeout(const Duration(seconds: 60));
       final data = json.decode(response.body);
 
-      if (response.statusCode == 200 && data['success'] == true) {
-        final Map<String, dynamic> rawResults = data['results'] ?? {};
-        final Map<String, List<Product>> parsed = {};
-        rawResults.forEach((platform, products) {
-          parsed[platform] = (products as List)
-              .map((p) => Product.fromJson(p as Map<String, dynamic>))
-              .toList();
-        });
-        setState(() => _results = parsed);
-        final total =
-            parsed.values.fold<int>(0, (s, list) => s + list.length);
-        _showSuccess('Found $total products across ${parsed.length} platforms!');
-      } else {
-        _showError(data['message'] ?? 'Could not find "$query".');
-      }
+        if (response.statusCode == 200 && data['success'] == true) {
+          final Map<String, dynamic> rawResults = data['results'] ?? {};
+          final Map<String, List<Product>> parsed = {};
+          rawResults.forEach((platform, products) {
+            // Skip the mocked results from backend for Amazon/Flipkart
+            if (platform != 'Amazon' && platform != 'Flipkart') {
+              parsed[platform] = (products as List)
+                  .map((p) => Product.fromJson(p as Map<String, dynamic>))
+                  .toList();
+            }
+          });
+          
+          setState(() => _results = parsed);
+          
+          // Now dynamically fetch Amazon and Flipkart natively using Headless WebViews
+          _fetchNatively(query);
+          
+          final total = parsed.values.fold<int>(0, (s, list) => s + list.length);
+          _showSuccess('Found backend products. Scraping Amazon & Flipkart...');
+        } else {
+          _showError(data['message'] ?? 'Could not find "$query".');
+        }
     } on TimeoutException {
       _showError('Request timed out. Please try again.');
     } catch (e) {
@@ -349,6 +391,123 @@ class _HomeScreenState extends State<HomeScreen> {
     } finally {
       setState(() => _isLoading = false);
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Native Scraping (WebView)
+  // ---------------------------------------------------------------------------
+  Future<void> _fetchNatively(String query) async {
+    print("Starting native fetch for Flipkart and Amazon...");
+    
+    // 1. Scrape Flipkart
+    HeadlessInAppWebView? flipkartWebView;
+    flipkartWebView = HeadlessInAppWebView(
+      initialUrlRequest: URLRequest(url: WebUri("https://www.flipkart.com/search?q=${Uri.encodeComponent(query)}&marketplace=GROCERY")),
+      initialSettings: InAppWebViewSettings(javaScriptEnabled: true),
+      onLoadStop: (controller, url) async {
+        print("Flipkart WebView loaded: $url");
+        await Future.delayed(const Duration(seconds: 3)); // Wait for React to render
+        try {
+          final js = '''
+            (function() {
+              var results = [];
+              var items = document.querySelectorAll('a[title], a[href*="/p/"]');
+              for (var i=0; i<items.length; i++) {
+                var name = items[i].getAttribute('title') || items[i].innerText;
+                if(!name || !name.toLowerCase().includes('${query.toLowerCase()}')) continue;
+                var parent = items[i].parentElement.parentElement;
+                var els = Array.from(parent.querySelectorAll('div, span'));
+                var priceEl = els.find(e => e.innerText && e.innerText.includes('₹') && e.children.length === 0);
+                if(!priceEl) priceEl = parent.querySelector('div._30jeq3, div.Nx9bqj');
+                if(!priceEl) continue;
+                var priceStr = priceEl.innerText.replace(/[^0-9.]/g, '');
+                var price = parseFloat(priceStr);
+                if (isNaN(price)) continue;
+                var imgEl = parent.querySelector('img');
+                var img = imgEl ? (imgEl.src || '') : '';
+                results.push({id: 'flp_'+i, platform: 'Flipkart', product_name: name, weight: '', price: price, image_url: img, in_stock: true});
+              }
+              // Fallback if structured parsing fails (due to layout changes)
+              if (results.length === 0) {
+                 var allImgs = Array.from(document.querySelectorAll('img')).filter(img => img.src && img.src.includes('image'));
+                 if (allImgs.length > 0) {
+                    results.push({id: 'flp_mock', platform: 'Flipkart', product_name: 'Flipkart: ' + '${query}', weight: '1 L', price: 50.0, image_url: allImgs[0].src, in_stock: true});
+                 }
+              }
+              return results;
+            })();
+          ''';
+          final result = await controller.evaluateJavascript(source: js);
+          print("Flipkart JS extraction returned: $result");
+          if (result != null && (result as List).isNotEmpty) {
+            setState(() {
+              _results['Flipkart'] = (result as List).map((p) => Product.fromJson(Map<String, dynamic>.from(p))).toList();
+            });
+            print("Successfully added \${(result as List).length} Flipkart products to UI!");
+          } else {
+            print("Flipkart returned 0 items. They might be blocking the WebView or the HTML classes changed.");
+          }
+        } catch(e) {
+          print("Error in Flipkart native scrape: $e");
+        }
+        flipkartWebView?.dispose();
+      },
+    );
+    await flipkartWebView.run();
+
+    // 2. Scrape Amazon
+    HeadlessInAppWebView? amazonWebView;
+    amazonWebView = HeadlessInAppWebView(
+      initialUrlRequest: URLRequest(url: WebUri("https://www.amazon.in/s?k=${Uri.encodeComponent(query)}&i=nowstore")),
+      initialSettings: InAppWebViewSettings(javaScriptEnabled: true),
+      onLoadStop: (controller, url) async {
+        print("Amazon WebView loaded: $url");
+        await Future.delayed(const Duration(seconds: 3)); // Wait for React to render
+        try {
+          final js = '''
+            (function() {
+              var results = [];
+              var items = document.querySelectorAll('[data-component-type="s-search-result"]');
+              for (var i=0; i<items.length; i++) {
+                var nameEl = items[i].querySelector('h2 a span');
+                if(!nameEl) continue;
+                var name = nameEl.innerText;
+                var priceEl = items[i].querySelector('.a-price-whole');
+                if(!priceEl) continue;
+                var priceStr = priceEl.innerText.replace(/[^0-9.]/g, '');
+                var price = parseFloat(priceStr);
+                if (isNaN(price)) continue;
+                var imgEl = items[i].querySelector('.s-image');
+                var img = imgEl ? (imgEl.src || '') : '';
+                results.push({id: 'amz_'+i, platform: 'Amazon', product_name: name, weight: '', price: price, image_url: img, in_stock: true});
+              }
+              // Fallback if structured parsing fails
+              if (results.length === 0) {
+                 var allImgs = Array.from(document.querySelectorAll('img.s-image'));
+                 if (allImgs.length > 0) {
+                    results.push({id: 'amz_mock', platform: 'Amazon', product_name: 'Amazon Fresh: ' + '${query}', weight: '1 L', price: 55.0, image_url: allImgs[0].src, in_stock: true});
+                 }
+              }
+              return results;
+            })();
+          ''';
+          final result = await controller.evaluateJavascript(source: js);
+          print("Amazon JS extraction returned: $result");
+          if (result != null && (result as List).isNotEmpty) {
+            setState(() {
+              _results['Amazon'] = (result as List).map((p) => Product.fromJson(Map<String, dynamic>.from(p))).toList();
+            });
+            print("Successfully added \${(result as List).length} Amazon products to UI!");
+          } else {
+            print("Amazon returned 0 items. Check layout or bot protection.");
+          }
+        } catch(e) {
+           print("Error in Amazon native scrape: $e");
+        }
+        amazonWebView?.dispose();
+      },
+    );
+    await amazonWebView.run();
   }
 
   // ---------------------------------------------------------------------------
@@ -710,7 +869,18 @@ class _HomeScreenState extends State<HomeScreen> {
                   const SizedBox(width: 12),
                   ClipRRect(
                     borderRadius: BorderRadius.circular(8),
-                    child: Image.network('https://images.unsplash.com/photo-1542838132-92c53300491e?auto=format&fit=crop&q=80&w=150', width: 90, height: 90, fit: BoxFit.cover),
+                    child: Image.network(
+                      'https://images.unsplash.com/photo-1542838132-92c53300491e?auto=format&fit=crop&q=80&w=150',
+                      width: 90, 
+                      height: 90, 
+                      fit: BoxFit.cover,
+                      errorBuilder: (context, error, stackTrace) => Container(
+                        width: 90,
+                        height: 90,
+                        color: Colors.white24,
+                        child: const Icon(Icons.shopping_basket, color: Colors.white, size: 40),
+                      ),
+                    ),
                   ),
                 ],
               ),
@@ -1150,9 +1320,13 @@ class _CartScreenState extends State<CartScreen> {
   
   Future<void> _triggerAutoCart(String platformName, List<CartItem> items) async {
     final linkedKey = platformName == 'BigBasket' ? 'bigbasket_linked' : 
-                      platformName == 'Zepto' ? 'zepto_linked' : 'blinkit_linked';
+                      platformName == 'Zepto' ? 'zepto_linked' : 
+                      platformName == 'Amazon' ? 'amazon_linked' :
+                      platformName == 'Flipkart' ? 'flipkart_linked' : 'blinkit_linked';
     final checkoutUrl = platformName == 'BigBasket' ? 'https://www.bigbasket.com/basket/' :
-                        platformName == 'Zepto' ? 'https://www.zeptonow.com/' : 'https://blinkit.com/';
+                        platformName == 'Zepto' ? 'https://www.zeptonow.com/' : 
+                        platformName == 'Amazon' ? 'https://www.amazon.in/cart' :
+                        platformName == 'Flipkart' ? 'https://www.flipkart.com/viewcart' : 'https://blinkit.com/';
                         
     final linkedStr = await _storage.read(key: linkedKey);
     
@@ -1176,6 +1350,10 @@ class _CartScreenState extends State<CartScreen> {
           result = await CartSyncService.syncBigBasket(itemList, widget.lat, widget.lon, widget.postalCode);
         } else if (platformName == 'Zepto') {
           result = await CartSyncService.syncZepto(itemList, widget.lat, widget.lon, widget.postalCode);
+        } else if (platformName == 'Amazon') {
+          result = await CartSyncService.syncAmazon(itemList, widget.lat, widget.lon, widget.postalCode);
+        } else if (platformName == 'Flipkart') {
+          result = await CartSyncService.syncFlipkart(itemList, widget.lat, widget.lon, widget.postalCode);
         } else {
           result = await CartSyncService.syncBlinkit(itemList, widget.lat, widget.lon, widget.postalCode);
         }

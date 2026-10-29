@@ -14,6 +14,8 @@ class _LinkAccountsScreenState extends State<LinkAccountsScreen> {
   bool _isBLinked = false;
   bool _isZeptoLinked = false;
   bool _isBlinkitLinked = false;
+  bool _isAmazonLinked = false;
+  bool _isFlipkartLinked = false;
   bool _showWebView = false;
   String _currentLoginPlatform = '';
   
@@ -30,10 +32,14 @@ class _LinkAccountsScreenState extends State<LinkAccountsScreen> {
     final linkedB = await _storage.read(key: 'bigbasket_linked');
     final linkedZ = await _storage.read(key: 'zepto_linked');
     final linkedBk = await _storage.read(key: 'blinkit_linked');
+    final linkedAmz = await _storage.read(key: 'amazon_linked');
+    final linkedFlp = await _storage.read(key: 'flipkart_linked');
     setState(() {
       _isBLinked = linkedB == 'true';
       _isZeptoLinked = linkedZ == 'true';
       _isBlinkitLinked = linkedBk == 'true';
+      _isAmazonLinked = linkedAmz == 'true';
+      _isFlipkartLinked = linkedFlp == 'true';
     });
   }
 
@@ -50,6 +56,14 @@ class _LinkAccountsScreenState extends State<LinkAccountsScreen> {
       await cookieManager.deleteCookies(url: WebUri("https://blinkit.com/"));
       await _storage.delete(key: 'blinkit_linked');
       setState(() => _isBlinkitLinked = false);
+    } else if (platform == 'Amazon') {
+      await cookieManager.deleteCookies(url: WebUri("https://www.amazon.in/"));
+      await _storage.delete(key: 'amazon_linked');
+      setState(() => _isAmazonLinked = false);
+    } else if (platform == 'Flipkart') {
+      await cookieManager.deleteCookies(url: WebUri("https://www.flipkart.com/"));
+      await _storage.delete(key: 'flipkart_linked');
+      setState(() => _isFlipkartLinked = false);
     }
   }
 
@@ -63,13 +77,19 @@ class _LinkAccountsScreenState extends State<LinkAccountsScreen> {
     } else if (platform == 'Blinkit') {
       await _storage.write(key: 'blinkit_linked', value: 'true');
       setState(() => _isBlinkitLinked = true);
+    } else if (platform == 'Amazon') {
+      await _storage.write(key: 'amazon_linked', value: 'true');
+      setState(() => _isAmazonLinked = true);
+    } else if (platform == 'Flipkart') {
+      await _storage.write(key: 'flipkart_linked', value: 'true');
+      setState(() => _isFlipkartLinked = true);
     }
     setState(() {
       _showWebView = false;
       _currentLoginPlatform = '';
     });
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$_currentLoginPlatform account linked successfully!')));
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Account linked successfully!')));
   }
 
   @override
@@ -100,6 +120,8 @@ class _LinkAccountsScreenState extends State<LinkAccountsScreen> {
               url: WebUri(
                 _currentLoginPlatform == 'BigBasket' ? "https://www.bigbasket.com/auth/login/" :
                 _currentLoginPlatform == 'Zepto' ? "https://www.zeptonow.com/" :
+                _currentLoginPlatform == 'Amazon' ? "https://www.amazon.in/" :
+                _currentLoginPlatform == 'Flipkart' ? "https://www.flipkart.com/account/login" :
                 "https://blinkit.com/"
               )
             ),
@@ -158,6 +180,30 @@ class _LinkAccountsScreenState extends State<LinkAccountsScreen> {
                      } catch(e) {}
                   }, 2000);
                 ''');
+              } else if (_currentLoginPlatform == 'Amazon') {
+                final isLoggedIn = await controller.evaluateJavascript(source: '''
+                  (function() {
+                     var links = Array.from(document.querySelectorAll('a, span'));
+                     var isAuth = links.some(e => e.innerText && e.innerText.toLowerCase().includes('sign out'));
+                     var hasUsername = document.querySelector('#nav-link-accountList-nav-line-1');
+                     return isAuth || (hasUsername && !hasUsername.innerText.toLowerCase().includes('sign in'));
+                  })();
+                ''');
+                if (isLoggedIn == true) {
+                  _onLoginSuccess('Amazon');
+                }
+              } else if (_currentLoginPlatform == 'Flipkart') {
+                final isLoggedIn = await controller.evaluateJavascript(source: '''
+                  (function() {
+                     var isAuth = document.cookie.includes('SN=');
+                     var links = Array.from(document.querySelectorAll('a, div'));
+                     var hasProfile = links.some(e => e.innerText && e.innerText.toLowerCase().includes('my profile'));
+                     return isAuth || hasProfile;
+                  })();
+                ''');
+                if (isLoggedIn == true) {
+                  _onLoginSuccess('Flipkart');
+                }
               } else if (_currentLoginPlatform == 'Blinkit') {
                 await controller.evaluateJavascript(source: '''
                   setInterval(function() {
@@ -197,7 +243,11 @@ class _LinkAccountsScreenState extends State<LinkAccountsScreen> {
           const SizedBox(height: 16),
           _buildPlatformCard('Zepto', _isZeptoLinked, const Color(0xFF330066)),
           const SizedBox(height: 16),
-          _buildPlatformCard('Blinkit', _isBlinkitLinked, const Color(0xFFF5C518)),
+          _buildPlatformCard('Blinkit', _isBlinkitLinked, const Color(0xFFFCCC04)),
+          const SizedBox(height: 16),
+          _buildPlatformCard('Amazon', _isAmazonLinked, const Color(0xFF0F1111)),
+          const SizedBox(height: 16),
+          _buildPlatformCard('Flipkart', _isFlipkartLinked, const Color(0xFF2874F0)),
         ],
       ),
     );

@@ -488,5 +488,89 @@ class CartSyncService {
       }
     }
     return {'added': addedCount, 'errors': errors};
+  static Future<Map<String, dynamic>> syncAmazon(List<Map<String, dynamic>> items, double lat, double lon, String postalCode) async {
+    int addedCount = 0;
+    List<String> errors = [];
+    
+    for (var item in items) {
+      if (item['id'].toString().contains('mock')) {
+        errors.add("${item['name']}: Cannot sync fallback product");
+        continue;
+      }
+      HeadlessInAppWebView headlessWebView = HeadlessInAppWebView(
+        initialUrlRequest: URLRequest(url: WebUri("https://www.amazon.in/s?k=${Uri.encodeComponent(item['name'])}&i=nowstore")),
+        initialSettings: InAppWebViewSettings(javaScriptEnabled: true),
+      );
+      await headlessWebView.run();
+      await Future.delayed(const Duration(seconds: 4)); // Let it load
+      
+      try {
+        final js = '''
+          (function() {
+             var addBtns = Array.from(document.querySelectorAll('button, input[type="submit"], a')).filter(btn => btn.innerText && (btn.innerText.toLowerCase().includes('add to cart') || btn.innerText.toLowerCase() === 'add'));
+             if (addBtns.length > 0) {
+                 addBtns[0].click();
+                 return "success";
+             }
+             return "not_found";
+          })();
+        ''';
+        final result = await headlessWebView.webViewController?.evaluateJavascript(source: js);
+        if (result == "success") {
+          addedCount++;
+          await Future.delayed(const Duration(seconds: 1)); // wait for cart animation
+        } else {
+          errors.add("${item['name']} failed: Could not find Add button");
+        }
+      } catch (e) {
+        errors.add("${item['name']} failed: Error during add");
+      } finally {
+        headlessWebView.dispose();
+      }
+    }
+    return {'added': addedCount, 'errors': errors};
+  }
+
+  static Future<Map<String, dynamic>> syncFlipkart(List<Map<String, dynamic>> items, double lat, double lon, String postalCode) async {
+    int addedCount = 0;
+    List<String> errors = [];
+    
+    for (var item in items) {
+      if (item['id'].toString().contains('mock')) {
+        errors.add("${item['name']}: Cannot sync fallback product");
+        continue;
+      }
+      HeadlessInAppWebView headlessWebView = HeadlessInAppWebView(
+        initialUrlRequest: URLRequest(url: WebUri("https://www.flipkart.com/search?q=${Uri.encodeComponent(item['name'])}&marketplace=GROCERY")),
+        initialSettings: InAppWebViewSettings(javaScriptEnabled: true),
+      );
+      await headlessWebView.run();
+      await Future.delayed(const Duration(seconds: 4)); // Let it load
+      
+      try {
+        final js = '''
+          (function() {
+             var addBtns = Array.from(document.querySelectorAll('button')).filter(btn => btn.innerText && btn.innerText.toLowerCase().includes('add'));
+             if (addBtns.length > 0) {
+                 addBtns[0].click();
+                 return "success";
+             }
+             return "not_found";
+          })();
+        ''';
+        final result = await headlessWebView.webViewController?.evaluateJavascript(source: js);
+        if (result == "success") {
+          addedCount++;
+          await Future.delayed(const Duration(seconds: 1)); // wait for cart animation
+        } else {
+          errors.add("${item['name']} failed: Could not find Add button");
+        }
+      } catch (e) {
+        errors.add("${item['name']} failed: Error during add");
+      } finally {
+        headlessWebView.dispose();
+      }
+    }
+    return {'added': addedCount, 'errors': errors};
   }
 }
